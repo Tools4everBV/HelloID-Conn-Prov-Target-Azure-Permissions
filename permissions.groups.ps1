@@ -1,26 +1,22 @@
 #####################################################
 # HelloID-Conn-Prov-Target-Azure-Permissions-permissions-Groups
 #
-# Version: 1.1.1
+# Version: 2.0.0 | new-powershell-connector
 #####################################################
-# Initialize default values
-$c = $configuration | ConvertFrom-Json
 
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 # Set debug logging
-switch ($($c.isDebug)) {
+switch ($($actionContext.Configuration.isDebug)) {
     $true { $VerbosePreference = 'Continue' }
     $false { $VerbosePreference = 'SilentlyContinue' }
 }
-$InformationPreference = "Continue"
-$WarningPreference = "Continue"
 
 # Used to connect to Azure AD Graph API
-$AADtenantID = $c.AADtenantID
-$AADAppId = $c.AADAppId
-$AADAppSecret = $c.AADAppSecret
+$AADtenantID = $actionContext.Configuration.AADtenantID
+$AADAppId = $actionContext.Configuration.AADAppId
+$AADAppSecret = $actionContext.Configuration.AADAppSecret
 
 #region functions
 function New-AuthorizationHeaders {
@@ -209,14 +205,16 @@ finally {
         # Shorten DisplayName to max. 100 chars
         $displayName = "Microsoft 365 Group - $($_.displayName)"
         $displayName = $displayName.substring(0, [System.Math]::Min(100, $displayName.Length)) 
-        $permission = @{
-            displayName    = $displayName
-            identification = @{
-                Id   = $_.id
-                Name = $_.displayName
+        
+        $outputContext.Permissions.Add(
+            @{
+                displayName    = $displayName
+                identification = @{
+                    Id   = $_.id
+                    Name = $_.displayName
+                }
             }
-        }
-        Write-output ($permission | ConvertTo-Json -Depth 10)
+        )
     }
 }
 
@@ -289,13 +287,14 @@ finally {
         # Shorten DisplayName to max. 100 chars
         $displayName = "Security Group - $($_.displayName)"
         $displayName = $displayName.substring(0, [System.Math]::Min(100, $displayName.Length)) 
-        $permission = @{
-            displayName    = $displayName
-            identification = @{
-                Id   = $_.id
-                Name = $_.displayName
+        $outputContext.Permissions.Add(
+            @{
+                displayName    = $displayName
+                identification = @{
+                    Id   = $_.id
+                    Name = $_.displayName
+                }
             }
-        }
-        Write-output ($permission | ConvertTo-Json -Depth 10)
+        )
     }
 }

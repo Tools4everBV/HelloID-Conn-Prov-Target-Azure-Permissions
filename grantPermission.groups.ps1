@@ -1,39 +1,31 @@
 #####################################################
 # HelloID-Conn-Prov-Target-Azure-Permissions-GrantPermission-Group
 #
-# Version: 1.1.1
+# Version: 2.0.0 | new-powershell-connector
 #####################################################
-# Initialize default values
-$c = $configuration | ConvertFrom-Json
-$p = $person | ConvertFrom-Json
-$success = $false # Set to false at start, at the end, only when no error occurs it is set to true
-$auditLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 # The accountReference object contains the Identification object provided in the create account call
-$aRef = $accountReference | ConvertFrom-Json
+$aRef = $actionContext.References.Account 
 
 # The permissionReference object contains the Identification object provided in the retrieve permissions call
-$pRef = $permissionReference | ConvertFrom-Json
+$pRef = $actionContext.References.Permission
 
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+# Set to false at start, at the end, only when no error occurs it is set to true
+$outputContext.Success = $false 
 
 # Set debug logging
-switch ($($c.isDebug)) {
+switch ($($actionContext.Configuration.isDebug)) {
     $true { $VerbosePreference = 'Continue' }
     $false { $VerbosePreference = 'SilentlyContinue' }
 }
-$InformationPreference = "Continue"
-$WarningPreference = "Continue"
 
 # Used to connect to Azure AD Graph API
-$AADtenantID = $c.AADtenantID
-$AADAppId = $c.AADAppId
-$AADAppSecret = $c.AADAppSecret
-
-# # Troubleshooting
-# $aRef = "9f4b2474-3c8d-4f92-94bc-58fed6e2d09b"
-# $dryRun = $false
+$AADtenantID = $actionContext.Configuration.AADtenantID
+$AADAppId = $actionContext.Configuration.AADAppId
+$AADAppSecret = $actionContext.Configuration.AADAppSecret
 
 #region functions
 function New-AuthorizationHeaders {
@@ -197,8 +189,8 @@ try {
         Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($verboseErrorMessage)"
 
         if ($auditErrorMessage -Like "No User found in Azure AD with id $($aRef)" -or $auditErrorMessage -Like "*(404) Not Found.*") {
-            if (-Not($dryRun -eq $True)) {
-                $auditLogs.Add([PSCustomObject]@{
+            if (-Not($actionContext.DryRun -eq $true)) {
+                $outputContext.AuditLogs.Add([PSCustomObject]@{
                         Action  = "GrantPermission"
                         Message = "No Azure AD account found with id $($aRef). Possibly deleted."
                         IsError = $false
@@ -209,7 +201,7 @@ try {
             }        
         }
         else {
-            $auditLogs.Add([PSCustomObject]@{
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
                     Action  = "GrantPermission"
                     Message = "Error querying Azure AD account with id $($aRef). Error Message: $auditErrorMessage"
                     IsError = $True
@@ -234,9 +226,9 @@ try {
                 Body    = ([System.Text.Encoding]::UTF8.GetBytes($body))
             }
             
-            if (-not($dryRun -eq $true)) {
+            if (-Not($actionContext.DryRun -eq $true)) {
                 $addPermission = Invoke-RestMethod @splatWebRequest -Verbose:$false
-                $auditLogs.Add([PSCustomObject]@{
+                $outputContext.AuditLogs.Add([PSCustomObject]@{
                         Action  = "GrantPermission"
                         Message = "Successfully granted permission to Group '$($pRef.Name) ($($pRef.id))' for account '$($currentAccount.userPrincipalName) ($($currentAccount.id))'"
                         IsError = $false
@@ -273,7 +265,7 @@ try {
             # Since the error message for adding a user that is already member is a 400 (bad request), we cannot check on a code or type
             # this may result in an incorrect check when the error messages are in any other language than english, please change this accordingly
             if ($auditErrorMessage -like "*One or more added object references already exist for the following modified properties*") {
-                $auditLogs.Add([PSCustomObject]@{
+                $outputContext.AuditLogs.Add([PSCustomObject]@{
                         Action  = "GrantPermission"
                         Message = "User '$($currentAccount.userPrincipalName)' is already a member of the group '$($pRef.Name)'. Skipped grant of permission to group '$($pRef.Name) ($($pRef.id))' for user '$($currentAccount.userPrincipalName) ($($currentAccount.id))'"
                         IsError = $false
@@ -281,7 +273,7 @@ try {
                 )
             }
             else {
-                $auditLogs.Add([PSCustomObject]@{
+                $outputContext.AuditLogs.Add([PSCustomObject]@{
                         Action  = "GrantPermission"
                         Message = "Error granting permission to Group '$($pRef.Name) ($($pRef.id))' for account '$($currentAccount.userPrincipalName) ($($currentAccount.id))'. Error Message: $auditErrorMessage"
                         IsError = $True
@@ -292,15 +284,7 @@ try {
 }
 finally {
     # Check if auditLogs contains errors, if no errors are found, set success to true
-    if (-NOT($auditLogs.IsError -contains $true)) {
-        $success = $true
+    if (-NOT($outputContext.AuditLogs.IsError -contains $true)) {
+        $outputContext.Success = $true
     }
-
-    # Send results
-    $result = [PSCustomObject]@{
-        Success   = $success
-        AuditLogs = $auditLogs
-    }
-
-    Write-Output ($result | ConvertTo-Json -Depth 10)
 }

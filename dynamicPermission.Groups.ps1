@@ -1,58 +1,28 @@
 #####################################################
 # HelloID-Conn-Prov-Target-AzureActiveDirectory-DynamicPermissions-Groups
 #
-# Version: 1.1.1
+# Version: 2.0.0 | new-powershell-connector
 #####################################################
-#region Initialize default properties
-$c = ConvertFrom-Json $configuration
-$p = $person | ConvertFrom-Json
-$pp = $previousPerson | ConvertFrom-Json
-$pd = $personDifferences | ConvertFrom-Json
-$m = $manager | ConvertFrom-Json
-$success = $false
-$auditLogs = [Collections.Generic.List[PSCustomObject]]::new()
 
-# Operation is a script parameter which contains the action HelloID wants to perform for this permission
-# It has one of the following values: "grant", "revoke", "update"
-$o = $operation | ConvertFrom-Json
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 # The accountReference object contains the Identification object provided in the create account call
-$aRef = $accountReference | ConvertFrom-Json
-$mRef = $managerAccountReference | ConvertFrom-Json
+$aRef = $actionContext.References.Account 
 
-# The permissionReference contains the Identification object provided in the retrieve permissions call
-$pRef = $permissionReference | ConvertFrom-Json
-
-# The entitlementContext contains the sub permissions (Previously the $permissionReference variable)
-$eRef = $entitlementContext | ConvertFrom-Json
-
-$currentPermissions = @{}
-foreach ($permission in $eRef.CurrentPermissions) {
-    $currentPermissions[$permission.Reference.Id] = $permission.DisplayName
-}
-
-# Determine all the sub-permissions that needs to be Granted/Updated/Revoked
-$subPermissions = [Collections.Generic.List[PSCustomObject]]::new()
-
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+# Set to false at start, at the end, only when no error occurs it is set to true
+$outputContext.Success = $false 
 
 # Set debug logging
-switch ($($c.isDebug)) {
+switch ($($actionContext.Configuration.isDebug)) {
     $true { $VerbosePreference = 'Continue' }
     $false { $VerbosePreference = 'SilentlyContinue' }
 }
-$InformationPreference = "Continue"
-$WarningPreference = "Continue"
 
 # Used to connect to Azure AD Graph API
-$AADtenantID = $c.AADtenantID
-$AADAppId = $c.AADAppId
-$AADAppSecret = $c.AADAppSecret
-
-# Troubleshooting
-# $aRef = '2045e4e8-b7c0-489b-8edb-2a676b40a503'
-# $dryRun = $false
+$AADtenantID = $actionContext.Configuration.AADtenantID
+$AADAppId = $actionContext.Configuration.AADAppId
+$AADAppSecret = $actionContext.Configuration.AADAppSecret
 
 #region functions
 function Get-ADSanitizeGroupName {
@@ -190,120 +160,141 @@ function Resolve-MicrosoftGraphAPIErrorMessage {
 
 #region Get Access Token
 try {
-    $headers = New-AuthorizationHeaders -TenantId $AADtenantID -ClientId $AADAppId -ClientSecret $AADAppSecret
-}
-catch {
-    # Clean up error variables
-    $verboseErrorMessage = $null
-    $auditErrorMessage = $null
-
-    $ex = $PSItem
-    if ( $($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-        $errorObject = Resolve-HTTPError -Error $ex
-
-        $verboseErrorMessage = $errorObject.ErrorMessage
-
-        $auditErrorMessage = Resolve-MicrosoftGraphAPIErrorMessage -ErrorObject $errorObject.ErrorMessage
+    try {
+        $headers = New-AuthorizationHeaders -TenantId $AADtenantID -ClientId $AADAppId -ClientSecret $AADAppSecret
     }
+    catch {
+        # Clean up error variables
+        $verboseErrorMessage = $null
+        $auditErrorMessage = $null
 
-    # If error message empty, fall back on $ex.Exception.Message
-    if ([String]::IsNullOrEmpty($verboseErrorMessage)) {
-        $verboseErrorMessage = $ex.Exception.Message
+        $ex = $PSItem
+        if ( $($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+            $errorObject = Resolve-HTTPError -Error $ex
+
+            $verboseErrorMessage = $errorObject.ErrorMessage
+
+            $auditErrorMessage = Resolve-MicrosoftGraphAPIErrorMessage -ErrorObject $errorObject.ErrorMessage
+        }
+
+        # If error message empty, fall back on $ex.Exception.Message
+        if ([String]::IsNullOrEmpty($verboseErrorMessage)) {
+            $verboseErrorMessage = $ex.Exception.Message
+        }
+        if ([String]::IsNullOrEmpty($auditErrorMessage)) {
+            $auditErrorMessage = $ex.Exception.Message
+        }
+
+        Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($verboseErrorMessage)"
+
+        $outputContext.AuditLogs.Add([PSCustomObject]@{
+                Action  = "GrantDynamicPermission"
+                Message = "Error creating Access Token. Error Message: $auditErrorMessage"
+                IsError = $true
+            })
+
+        throw "Error creating Access Token. Error Message: $auditErrorMessage"
     }
-    if ([String]::IsNullOrEmpty($auditErrorMessage)) {
-        $auditErrorMessage = $ex.Exception.Message
-    }
+    #endregion Get Access Token
 
-    Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($verboseErrorMessage)"
+    try {
+        #region Change mapping here
+        $desiredPermissions = @{}
+        if (-Not($actionContext.Operation -eq "revoke")) {
+            # Example: Contract Based Logic:
+            foreach ($contract in $personContext.Person.Contracts) {
+                Write-Verbose ("Contract in condition: {0}" -f $contract.Context.InConditions)
+                if ($contract.Context.InConditions -OR ($actionContext.DryRun -eq $true)) {
+                    # Example: department_<departmentname>
+                    $groupName = "department_" + $contract.Department.DisplayName
 
-    throw "Error creating Access Token. Error Message: $auditErrorMessage"
-}
-#endregion Get Access Token
+                    # Example: title_<titlename>
+                    # $groupName = "title_" + $contract.Title.Name
 
-#region Change mapping here
-$desiredPermissions = @{}
-if ($o -ne "revoke") {
-    # Example: Contract Based Logic:
-    foreach ($contract in $p.Contracts) {
-        Write-Verbose ("Contract in condition: {0}" -f $contract.Context.InConditions)
-        if ($contract.Context.InConditions -OR ($dryRun -eq $True)) {
-            # Example: department_<departmentname>
-            $groupName = "department_" + $contract.Department.DisplayName
-
-            # Example: title_<titlename>
-            # $groupName = "title_" + $contract.Title.Name
-
-            # Sanitize group name, e.g. replace ' - ' with '_' or other sanitization actions 
-            $groupName = Get-ADSanitizeGroupName -Name $groupName
+                    # Sanitize group name, e.g. replace ' - ' with '_' or other sanitization actions 
+                    $groupName = Get-ADSanitizeGroupName -Name $groupName
             
-            # Get group to use objectGuid to avoid name change issues
-            $filter = "displayName+eq+'$($groupName)'"
-            Write-Verbose "Querying Azure AD group that matches filter '$($filter)'"
+                    # Get group to use objectGuid to avoid name change issues
+                    $filter = "displayName+eq+'$($groupName)'"
+                    Write-Verbose "Querying Azure AD group that matches filter '$($filter)'"
 
-            $baseUri = "https://graph.microsoft.com/"
-            $splatWebRequest = @{
-                Uri     = "$baseUri/v1.0/groups?`$filter=$($filter)"
-                Headers = $headers
-                Method  = 'GET'
-            }
-            $group = $null
-            $groupResponse = Invoke-RestMethod @splatWebRequest -Verbose:$false
-            $group = $groupResponse.Value
+                    $baseUri = "https://graph.microsoft.com/"
+                    $splatWebRequest = @{
+                        Uri     = "$baseUri/v1.0/groups?`$filter=$($filter)"
+                        Headers = $headers
+                        Method  = 'GET'
+                    }
+                    $group = $null
+                    $groupResponse = Invoke-RestMethod @splatWebRequest -Verbose:$false
+                    $group = $groupResponse.Value
     
-            if ($group.Id.count -eq 0) {
-                Write-Error "No Group found that matches filter '$($filter)'"
-            }
-            elseif ($group.Id.count -gt 1) {
-                Write-Error "Multiple Groups found that matches filter '$($filter)'. Please correct this so the groups are unique."
-            }
+                    if ($group.Id.count -eq 0) {
+                        Throw "No Group found that matches filter '$($filter)'"
+                    }
+                    elseif ($group.Id.count -gt 1) {
+                        Throw  "Multiple Groups found that matches filter '$($filter)'. Please correct this so the groups are unique."
+                    }
 
-            # Add group to desired permissions with the id as key and the displayname as value (use id to avoid issues with name changes and for uniqueness)
-            $desiredPermissions["$($group.id)"] = $group.displayName
+                    # Add group to desired permissions with the id as key and the displayname as value (use id to avoid issues with name changes and for uniqueness)
+                    $desiredPermissions["$($group.id)"] = $group.displayName
+                }
+            }
+    
+            # Example: Person Based Logic:
+            # Example: location_<locationname>
+            # $groupName = "location_" + $p.Location.Name
+
+            # # Sanitize group name, e.g. replace ' - ' with '_' or other sanitization actions 
+            # $groupName = Get-ADSanitizeGroupName -Name $groupName
+    
+            # # Get group to use objectGuid to avoid name change issues
+            # $filter = "displayName+eq+'$($groupName)'"
+            # Write-Verbose "Querying Azure AD group that matches filter '$($filter)'"
+
+            # $baseUri = "https://graph.microsoft.com/"
+            # $splatWebRequest = @{
+            #     Uri     = "$baseUri/v1.0/groups?`$filter=$($filter)"
+            #     Headers = $headers
+            #     Method  = 'GET'
+            # }
+            # $group = $null
+            # $groupResponse = Invoke-RestMethod @splatWebRequest -Verbose:$false
+            # $group = $groupResponse.Value
+
+            # if ($group.Id.count -eq 0) {
+            #     Write-Error "No Group found that matches filter '$($filter)'"
+            # }
+            # elseif ($group.Id.count -gt 1) {
+            #     Write-Error "Multiple Groups found that matches filter '$($filter)'. Please correct this so the groups are unique."
+            # }
+
+            # # Add group to desired permissions with the id as key and the displayname as value (use id to avoid issues with name changes and for uniqueness)
+            # $desiredPermissions["$($group.id)"] = $group.displayName
         }
     }
+    catch {
+        $ex = $PSItem      
+        $outputContext.AuditLogs.Add([PSCustomObject]@{
+                Action  = "GrantDynamicPermission"
+                Message = "$($ex.Exception.Message)"
+                IsError = $true
+            })
+        throw $_
+    }
     
-    # Example: Person Based Logic:
-    # Example: location_<locationname>
-    # $groupName = "location_" + $p.Location.Name
 
-    # # Sanitize group name, e.g. replace ' - ' with '_' or other sanitization actions 
-    # $groupName = Get-ADSanitizeGroupName -Name $groupName
-    
-    # # Get group to use objectGuid to avoid name change issues
-    # $filter = "displayName+eq+'$($groupName)'"
-    # Write-Verbose "Querying Azure AD group that matches filter '$($filter)'"
 
-    # $baseUri = "https://graph.microsoft.com/"
-    # $splatWebRequest = @{
-    #     Uri     = "$baseUri/v1.0/groups?`$filter=$($filter)"
-    #     Headers = $headers
-    #     Method  = 'GET'
-    # }
-    # $group = $null
-    # $groupResponse = Invoke-RestMethod @splatWebRequest -Verbose:$false
-    # $group = $groupResponse.Value
 
-    # if ($group.Id.count -eq 0) {
-    #     Write-Error "No Group found that matches filter '$($filter)'"
-    # }
-    # elseif ($group.Id.count -gt 1) {
-    #     Write-Error "Multiple Groups found that matches filter '$($filter)'. Please correct this so the groups are unique."
-    # }
+    Write-Warning ("Desired Permissions: {0}" -f ($desiredPermissions.Values | ConvertTo-Json))
 
-    # # Add group to desired permissions with the id as key and the displayname as value (use id to avoid issues with name changes and for uniqueness)
-    # $desiredPermissions["$($group.id)"] = $group.displayName
-}
+    Write-Warning ("Existing Permissions: {0}" -f ($actionContext.CurrentPermissions.DisplayName | ConvertTo-Json))
+    #endregion Change mapping here
 
-Write-Warning ("Desired Permissions: {0}" -f ($desiredPermissions.Values | ConvertTo-Json))
+    #region Execute
 
-Write-Warning ("Existing Permissions: {0}" -f ($eRef.CurrentPermissions.DisplayName | ConvertTo-Json))
-#endregion Change mapping here
-
-#region Execute
-try {
     # Compare desired with current permissions and grant permissions
     foreach ($permission in $desiredPermissions.GetEnumerator()) {
-        $subPermissions.Add([PSCustomObject]@{
+        $outputContext.SubPermissions.Add([PSCustomObject]@{
                 DisplayName = $permission.Value
                 Reference   = [PSCustomObject]@{ Id = $permission.Name }
             })
@@ -326,10 +317,10 @@ try {
                     Body    = ([System.Text.Encoding]::UTF8.GetBytes($body))
                 }
                 
-                if (-not($dryRun -eq $true)) {
+                if (-Not($actionContext.DryRun -eq $true)) {
                     $addPermission = Invoke-RestMethod @splatWebRequest -Verbose:$false
-                    $auditLogs.Add([PSCustomObject]@{
-                            Action  = "GrantPermission"
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = "GrantDynamicPermission"
                             Message = "Successfully granted permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'"
                             IsError = $false
                         })
@@ -365,18 +356,18 @@ try {
                 # Since the error message for adding a user that is already member is a 400 (bad request), we cannot check on a code or type
                 # this may result in an incorrect check when the error messages are in any other language than english, please change this accordingly
                 if ($auditErrorMessage -like "*One or more added object references already exist for the following modified properties*") {
-                    $auditLogs.Add([PSCustomObject]@{
-                            Action  = "GrantPermission"
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = "GrantDynamicPermission"
                             Message = "User '$($aRef)' is already a member of the group '$($permission.Value)'. Skipped grant of permission to group '$($permission.Value) ($($permission.Name))' for user '$($aRef)'"
                             IsError = $false
                         }
                     )
                 }
                 else {
-                    $auditLogs.Add([PSCustomObject]@{
-                            Action  = "GrantPermission"
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = "GrantDynamicPermission"
                             Message = "Error granting permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'. Error Message: $auditErrorMessage"
-                            IsError = $True
+                            IsError = $true
                         })
                 }
             }
@@ -397,12 +388,12 @@ try {
                     Headers = $headers
                     Method  = 'DELETE'
                 }
-                Write-Warning ($splatWebRequest|Out-String)
+                Write-Warning ($splatWebRequest | Out-String)
     
-                if (-not($dryRun -eq $true)) {
+                if (-Not($actionContext.DryRun -eq $true)) {
                     $removePermission = Invoke-RestMethod @splatWebRequest -Verbose:$false
-                    $auditLogs.Add([PSCustomObject]@{
-                            Action  = "RevokePermission"
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = "RevokeDynamicPermission"
                             Message = "Successfully revoked permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'"
                             IsError = $false
                         })
@@ -432,21 +423,21 @@ try {
                 if ([String]::IsNullOrEmpty($auditErrorMessage)) {
                     $auditErrorMessage = $ex.Exception.Message
                 }
-            
+
                 Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($verboseErrorMessage)"
-             
+
                 if ($auditErrorMessage -like "*Error code: Request_ResourceNotFound*" -and $auditErrorMessage -like "*$($permission.Name)*") {
-                    $auditLogs.Add([PSCustomObject]@{
-                            Action  = "RevokePermission"
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = "RevokeDynamicPermission"
                             Message = "Membership to group '$($permission.Value)' for user '$($aRef)' couldn't be found. User is already no longer a member or the group no longer exists. Skipped revoke of permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'"
                             IsError = $false
                         })
                 }
                 else {
-                    $auditLogs.Add([PSCustomObject]@{
-                            Action  = "RevokePermission"
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = "RevokeDynamicPermission"
                             Message = "Error revoking permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'. Error Message: $auditErrorMessage"
-                            IsError = $True
+                            IsError = $true
                         })
                 }
             }
@@ -481,11 +472,11 @@ try {
     #                 Method  = 'POST'
     #                 Body    = ([System.Text.Encoding]::UTF8.GetBytes($body))
     #             }
-                    
-    #             if (-not($dryRun -eq $true)) {
+        
+    #             if (-Not($actionContext.DryRun -eq $true)) {
     #                 $addPermission = Invoke-RestMethod @splatWebRequest -Verbose:$false
-    #                 $auditLogs.Add([PSCustomObject]@{
-    #                         Action  = "UpdatePermission"
+    #                 $outputContext.AuditLogs.Add([PSCustomObject]@{
+    #                         Action  = "UpdateDynamicPermission"
     #                         Message = "Successfully granted permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'"
     #                         IsError = $false
     #                     })
@@ -521,16 +512,16 @@ try {
     #             # Since the error message for adding a user that is already member is a 400 (bad request), we cannot check on a code or type
     #             # this may result in an incorrect check when the error messages are in any other language than english, please change this accordingly
     #             if ($auditErrorMessage -like "*One or more added object references already exist for the following modified properties*") {
-    #                 $auditLogs.Add([PSCustomObject]@{
-    #                         Action  = "UpdatePermission"
+    #                 $outputContext.AuditLogs.Add([PSCustomObject]@{
+    #                         Action  = "UpdateDynamicPermission"
     #                         Message = "User '$($aRef)' is already a member of the group '$($permission.Value)'. Skipped grant of permission to group '$($permission.Value) ($($permission.Name))' for user '$($aRef)'"
     #                         IsError = $false
     #                     }
     #                 )
     #             }
     #             else {
-    #                 $auditLogs.Add([PSCustomObject]@{
-    #                         Action  = "UpdatePermission"
+    #                 $outputContext.AuditLogs.Add([PSCustomObject]@{
+    #                         Action  = "UpdateDynamicPermission"
     #                         Message = "Error granting permission to Group '$($permission.Value) ($($permission.Name))' for account '$($aRef)'. Error Message: $auditErrorMessage"
     #                         IsError = $True
     #                     })
@@ -538,28 +529,21 @@ try {
     #         }
     #     }    
     # }
-    
+}
+#endregion Execute
+catch {
+    Write-Verbose $_
+}
+finally { 
     # Handle case of empty defined dynamic permissions.  Without this the entitlement will error.
-    if ($o -match "update|grant" -AND $subPermissions.count -eq 0) {
-        $subPermissions.Add([PSCustomObject]@{
+    if ($actionContext.Operation -match "update|grant" -AND $outputContext.SubPermissions.count -eq 0) {
+        $outputContext.SubPermissions.Add([PSCustomObject]@{
                 DisplayName = "No Groups Defined"
                 Reference   = [PSCustomObject]@{ Id = "No Groups Defined" }
             })
     }
-}
-#endregion Execute
-finally { 
     # Check if auditLogs contains errors, if no errors are found, set success to true
-    if (-NOT($auditLogs.IsError -contains $true)) {
-        $success = $true
+    if (-NOT($outputContext.AuditLogs.IsError -contains $true)) {
+        $outputContext.Success = $true
     }
-
-    #region Build up result
-    $result = [PSCustomObject]@{
-        Success        = $success
-        SubPermissions = $subPermissions
-        AuditLogs      = $auditLogs
-    }
-    Write-Output ($result | ConvertTo-Json -Depth 10)
-    #endregion Build up result
 }

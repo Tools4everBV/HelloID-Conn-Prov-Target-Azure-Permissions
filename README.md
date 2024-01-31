@@ -1,3 +1,15 @@
+| :warning: Warning |
+| :---------------- |
+| This readme is not updated. This will be done in combination with the import/export file for powershell V2 |
+
+| :warning: Warning |
+| :---------------- |
+| Not all scripts are converted to powershell V2. Please check the comments in the first 5 rows of the code |
+
+| :warning: Warning |
+| :---------------- |
+| This script is for the new powershell connector. Make sure to use the mapping and correlation keys like mentionded in this readme. For more information, please read our [documentation](https://docs.helloid.com/en/provisioning/target-systems/powershell-v2-target-systems.html) |
+
 | :information_source: Information |
 |:---------------------------|
 | This repository contains the connector and configuration code only. The implementer is responsible to acquire the connection details such as username, password, certificate, etc. You might even need to sign a contract or agreement with the supplier before implementing this connector. Please contact the client's application manager to coordinate the connector requirements.       |
@@ -6,15 +18,8 @@
   <img src="https://www.tools4ever.nl/connector-logos/azureactivedirectory-logo.png">
 </p>
 
-## Versioning
-| Version | Description | Date |
-| - | - | - |
-| 1.1.0   | Updated with new logging and added license management | 2022/07/12  |
-| 1.0.0   | Initial release | 2021/07/30  |
-
 <!-- TABLE OF CONTENTS -->
 ## Table of Contents
-- [Versioning](#versioning)
 - [Table of Contents](#table-of-contents)
 - [Introduction](#introduction)
 - [Getting the Azure AD graph API access](#getting-the-azure-ad-graph-api-access)
