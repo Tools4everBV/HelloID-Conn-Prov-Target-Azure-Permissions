@@ -24,6 +24,11 @@ $AADtenantID = $actionContext.Configuration.AADtenantID
 $AADAppId = $actionContext.Configuration.AADAppId
 $AADAppSecret = $actionContext.Configuration.AADAppSecret
 
+$currentPermissions = @{}
+foreach ($permission in $actionContext.CurrentPermissions) {
+    $currentPermissions[$permission.Reference.Id] = $permission.DisplayName
+}
+
 #region functions
 function Get-ADSanitizeGroupName {
     param(
