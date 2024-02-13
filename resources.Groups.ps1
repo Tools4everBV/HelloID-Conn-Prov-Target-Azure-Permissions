@@ -1,33 +1,27 @@
 #####################################################
 # HelloID-Conn-Prov-Target-AzureActiveDirectory-ResourceCreation-Groups
 #
-# Version: 1.1.1
+# Version: 2.0.0 | new-powershell-connector
 #####################################################
-#region Initialize default properties
-$c = $configuration | ConvertFrom-Json
-$rRef = $resourceContext | ConvertFrom-Json
-$success = $false # Set to false at start, at the end, only when no error occurs it is set to true
-$auditLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+
+# Set to false at start, at the end, only when no error occurs it is set to true
+$outputContext.Success = $false 
 
 # Set debug logging
-switch ($($c.isDebug)) {
+switch ($($actionContext.Configuration.isDebug)) {
     $true { $VerbosePreference = 'Continue' }
     $false { $VerbosePreference = 'SilentlyContinue' }
 }
-$InformationPreference = "Continue"
-$WarningPreference = "Continue"
 
 # Used to connect to Azure AD Graph API
-$AADtenantID = $c.AADtenantID
-$AADAppId = $c.AADAppId
-$AADAppSecret = $c.AADAppSecret
+$AADtenantID = $actionContext.Configuration.AADtenantID
+$AADAppId = $actionContext.Configuration.AADAppId
+$AADAppSecret = $actionContext.Configuration.AADAppSecret
 
-# Troubleshooting
-# $dryRun = $false
-
+#region functions
 #region functions
 function Get-ADSanitizeGroupName {
     param(
@@ -165,7 +159,7 @@ function Resolve-MicrosoftGraphAPIErrorMessage {
 #region Execute
 # In preview only the first 10 items of the SourceData are used
 try {
-    foreach ($resource in $rRef.SourceData) {
+    foreach ($resource in $resourceContext.SourceData) {
         Write-Verbose "Checking $($resource)"
         try {
             #region Change mapping here
@@ -260,7 +254,7 @@ try {
                     }
                 }
 
-                if (-Not($dryRun -eq $True)) {
+                if (-Not($actionContext.DryRun -eq $True)) {
                     $headers = New-AuthorizationHeaders -TenantId $AADtenantID -ClientId $AADAppId -ClientSecret $AADAppSecret
 
                     $body = $group | ConvertTo-Json -Depth 10
@@ -274,7 +268,7 @@ try {
                     $newGroup = $null
                     $newGroup = Invoke-RestMethod @splatWebRequest -Verbose:$false
 
-                    $auditLogs.Add([PSCustomObject]@{
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
                             Message = "Created group: $($newGroup.displayName) ($($newGroup.Id))"
                             Action  = "CreateResource"
                             IsError = $false
@@ -285,11 +279,11 @@ try {
                 }
             }
             else {
-                if ($dryRun -eq $True) {
+                if ($actionContext.DryRun -eq $True) {
                     Write-Warning "Group $($groupName) already exists"
                 }
 
-                # $auditLogs.Add([PSCustomObject]@{
+                # $outputContext.AuditLogs.Add([PSCustomObject]@{
                 #     Message = "Skipped creation of group: $($newGroup.displayName) ($($newGroup.Id))"
                 #     Action  = "CreateResource"
                 #     IsError = $false
@@ -322,7 +316,7 @@ try {
 
             Write-Warning "Failed to create group $($groupName): $($group | ConvertTo-Json). Error Message: $auditErrorMessage"
 
-            $auditLogs.Add([PSCustomObject]@{
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
                     Message = "Failed to create group $($groupName). Error Message: $auditErrorMessage"
                     Action  = "CreateResource"
                     IsError = $true
@@ -333,15 +327,7 @@ try {
 #endregion Execute
 finally {
     # Check if auditLogs contains errors, if no errors are found, set success to true
-    if (-NOT($auditLogs.IsError -contains $true)) {
-        $success = $true
+    if (-NOT($outputContext.AuditLogs.IsError -contains $true)) {
+        $outputContext.Success = $true
     }
-
-    #region Build up result
-    $result = [PSCustomObject]@{
-        Success   = $success
-        AuditLogs = $auditLogs
-    }
-    Write-Output ($result | ConvertTo-Json -Depth 10)
-    #endregion Build up result
 }
