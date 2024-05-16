@@ -1,35 +1,85 @@
 [
   {
-    "key": "AADtenantID",
+    "key": "TenantID",
     "type": "input",
     "defaultValue": "",
     "templateOptions": {
-      "label": "Azure AD Tenant ID",
+      "label": "App Registration Directory (tenant) ID",
       "placeholder": "615g75e2-0v74-4a3c-6gaf-241t1q4m7f54",
       "description": "",
       "required": true
     }
   },
   {
-    "key": "AADAppId",
+    "key": "AppId",
     "type": "input",
     "defaultValue": "",
     "templateOptions": {
-      "label": "Azure AD App ID",
+      "label": "App Registration Application (client) ID",
       "placeholder": "9c12a9b1-34c5-678d-ac34-8a890100d46d",
       "description": "",
       "required": true
     }
   },
   {
-    "key": "AADAppSecret",
+    "key": "AppSecret",
     "type": "input",
     "defaultValue": "",
     "templateOptions": {
-      "label": "Azure AD App Secret",
+      "label": "App Registration Client Secret",
       "type": "password",
       "placeholder": "3lib1234NwDvx.6abc98M._r0yz_7h_B34",
       "required": true
+    }
+  },
+  {
+    "key": "correlateOnly",
+    "type": "checkbox",
+    "defaultValue": false,
+    "templateOptions": {
+      "label": "Correlate only",
+      "description": "When toggled, this connector will only correlate to an existing account and skip all further account lifecycle actions",
+      "required": false
+    }
+  },
+  {
+    "key": "inviteAsGuest",
+    "type": "checkbox",
+    "defaultValue": false,
+    "templateOptions": {
+      "label": "Invite as Guest",
+      "description": "When toggled, this connector will create Guest accounts through invitation, allowing users to log in using their invited email addresses",
+      "required": false
+    }
+  },
+  {
+    "key": "deleteAccount",
+    "type": "checkbox",
+    "defaultValue": false,
+    "templateOptions": {
+      "label": "Delete the account when revoking the entitlement",
+      "description": "",
+      "required": false
+    }
+  },
+  {
+    "key": "setPrimaryManagerOnCreate",
+    "type": "checkbox",
+    "defaultValue": false,
+    "templateOptions": {
+      "label": "Set primary manager when an account is created",
+      "description": "",
+      "required": false
+    }
+  },
+  {
+    "key": "updatePrimaryManagerOnUpdate",
+    "type": "checkbox",
+    "defaultValue": false,
+    "templateOptions": {
+      "label": "Update manager when the account updated operation is performed",
+      "description": "",
+      "required": false
     }
   },
   {

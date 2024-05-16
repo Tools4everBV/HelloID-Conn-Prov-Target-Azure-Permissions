@@ -1,0 +1,23 @@
+{
+  "Version": "v1",
+  "MappingFields": [
+    {
+      "Name": "emailAuthenticationMethod.email",
+      "Description": "The email address registered to this user.",
+      "Type": "Text",
+      "MappingActions": [
+        {
+          "MapForActions": [
+            "Create",
+            "Update"
+          ],
+          "MappingMode": "Field",
+          "Value": "\"Person.Contact.Personal.Email\"",
+          "UsedInNotifications": false,
+          "StoreInAccountData": true
+        }
+      ]
+    }
+  ],
+  "UniqueFieldNames": []
+}
